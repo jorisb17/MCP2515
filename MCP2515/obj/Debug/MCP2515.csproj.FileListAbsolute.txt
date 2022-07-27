@@ -1,0 +1,14 @@
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\MCP2515.exe
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\MCP2515.pdb
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\GHIElectronics.TinyCLR.Devices.Gpio.dll
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\GHIElectronics.TinyCLR.Devices.Spi.dll
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\GHIElectronics.TinyCLR.Native.dll
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\GHIElectronics.TinyCLR.Pins.dll
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\mscorlib.dll
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\obj\Debug\MCP2515.csproj.AssemblyReference.cache
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\obj\Debug\MCP2515.csproj.SuggestedBindingRedirects.cache
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\obj\Debug\MCP2515.csproj.CoreCompileInputs.cache
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\obj\Debug\MCP2515.csproj.CopyComplete
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\obj\Debug\MCP2515.exe
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\obj\Debug\MCP2515.pdb
+C:\Users\joris\Documents\Retina\MCP2515\MCP2515\bin\Debug\GHIElectronics.TinyCLR.Devices.Can.dll
