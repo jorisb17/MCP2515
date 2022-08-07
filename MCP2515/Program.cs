@@ -16,20 +16,6 @@ namespace MCP2515
         {
 
 
-            var can = CanController.FromName(SC20100.CanBus.Can1);
-
-            var propagationPhase1 = 13;
-            var phase2 = 2;
-            var baudratePrescaler = 12;
-            var synchronizationJumpWidth = 1;
-            var useMultiBitSampling = false;
-
-            can.SetNominalBitTiming(new CanBitTiming(propagationPhase1, phase2, baudratePrescaler,
-                synchronizationJumpWidth, useMultiBitSampling));
-
-            can.MessageReceived += Can_MessageReceived;
-            //can.ErrorReceived += Can_ErrorReceived;
-
             int cnt = 0;
             var cs1 = GpioController.GetDefault().OpenPin(SC20100.GpioPin.PD3);
             var cs2 = GpioController.GetDefault().OpenPin(SC20100.GpioPin.PD14);
@@ -39,77 +25,96 @@ namespace MCP2515
                 ChipSelectType = SpiChipSelectType.Gpio,
                 ChipSelectLine = cs1,
                 Mode = SpiMode.Mode0,
-                ClockFrequency = 4_000_000,
+                ClockFrequency = 10_000_000,
                 ChipSelectActiveState = false
             };
 
             var message = new CanMessage()
             {
                 Data = new byte[] { 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x2E, 0x20, 0x20 },
-                ArbitrationId = 0x11,
-                Length = 6,
+                ArbitrationId = 0x12345678,
+                Length = 8,
                 RemoteTransmissionRequest = false,
-                ExtendedId = false,
+                ExtendedId = true,
                 FdCan = false,
                 BitRateSwitch = false
             };
 
-            var LdrButton = GpioController.GetDefault().OpenPin(SC20100.GpioPin.PE3);
-            LdrButton.SetDriveMode(GpioPinDriveMode.InputPullUp);
 
             var controller = SpiController.FromName(SC20100.SpiBus.Spi3);
 
             var spi1 = controller.GetDevice(settings1);
 
             MCP2515 can1 = new(spi1);
-            MCP2515.ERROR err;
-            err = can1.Reset();
-            Debug.WriteLine("Reset: " + err);
+            while(can1.Reset() != CanInterface.ERROR.ERROR_OK);
 
-            err =can1.SetBitrate(MCP2515.CAN_SPEED.CAN_125KBPS);
-            Debug.WriteLine("Set Bitrate: " + err);
+            while(can1.SetBitrate(MCP2515.CAN_SPEED.CAN_125KBPS) != CanInterface.ERROR.ERROR_OK) ;
 
-            can1.SetNormalMode();
-            Debug.WriteLine("Set Normal: " + err);
+            while(can1.SetNormalMode() != CanInterface.ERROR.ERROR_OK);
 
             var settings2 = new SpiConnectionSettings()
             {
                 ChipSelectType = SpiChipSelectType.Gpio,
                 ChipSelectLine = cs2,
                 Mode = SpiMode.Mode0,
-                ClockFrequency = 4_000_000,
+                ClockFrequency = 10_000_000,
                 ChipSelectActiveState = false
             };
 
             var spi2 = controller.GetDevice(settings2);
 
+            MCP2515 can2 = new(spi2);
+            while(can2.Reset() != CanInterface.ERROR.ERROR_OK);
 
-            can.Enable();
+            while(can2.SetBitrate(MCP2515.CAN_SPEED.CAN_125KBPS)!= CanInterface.ERROR.ERROR_OK);
 
-            CanFrame canMsg1 = new();
-            canMsg1.can_id = 0x0F6;
-            canMsg1.can_dlc = 8;
-            canMsg1.data[0] = 0x8E;
-            canMsg1.data[1] = 0x87;
-            canMsg1.data[2] = 0x32;
-            canMsg1.data[3] = 0xFA;
-            canMsg1.data[4] = 0x26;
-            canMsg1.data[5] = 0x8E;
-            canMsg1.data[6] = 0xBE;
-            canMsg1.data[7] = 0x86;
+            while(can2.SetNormalMode() != CanInterface.ERROR.ERROR_OK);
 
-            
 
+            CanMessage canMsg1 = new();
+            canMsg1.ArbitrationId = 0x00FD0900;
+            canMsg1.ExtendedId = true;
+            canMsg1.RemoteTransmissionRequest = false;
+            canMsg1.Length = 8;
+            canMsg1.Data[0] = 0x8E;
+            canMsg1.Data[1] = 0x87;
+            canMsg1.Data[2] = 0x32;
+            canMsg1.Data[3] = 0xFA;
+            canMsg1.Data[4] = 0x26;
+            canMsg1.Data[5] = 0x8E;
+            canMsg1.Data[6] = 0xBE;
+            canMsg1.Data[7] = 0x86;
+
+            can1.SetFilterMask(MCP2515.MASK.MASK1, true, 0x00FFFF00);
+            can1.SetFilter(MCP2515.RXF.RXF1, true, 0x00FD0900);
+
+
+            Debug.WriteLine("------- CAN Read ----------");
+            Debug.WriteLine("ID  DLC   DATA");
+
+            CanMessage res;
+            CanInterface.ERROR err;
 
             while (true)
             {
                 //can.WriteMessage(message);
-                Thread.Sleep(5000);
-                err = can1.SendMessage(canMsg1);
-                Debug.WriteLine("Send MSG: " + err);
-                if(err == MCP2515.ERROR.ERROR_ALLTXBUSY)
+                err = can2.SendMessage(canMsg1);
+                Thread.Sleep(1000);
+                         
+                err = can1.ReadMessage(out res);
+                if (err == CanInterface.ERROR.ERROR_OK)
                 {
-                    can1.ClearTXInterrupts();
+                    Debug.Write(res.ArbitrationId.ToString("X08"));
+                    Debug.Write(" ");
+                    Debug.Write(res.Length.ToString("X08"));
+                    Debug.Write(" ");
+
+                    for (int i = 0; i < res.Length; i++)
+                    {  // print the data
+                        Debug.Write(res.Data[i].ToString("X08"));
+                        Debug.Write(" ");
+                    }
+                    Debug.WriteLine("");
                 }
             }
         }

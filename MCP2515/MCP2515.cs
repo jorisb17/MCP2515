@@ -1,4 +1,5 @@
-﻿using GHIElectronics.TinyCLR.Devices.Gpio;
+﻿using GHIElectronics.TinyCLR.Devices.Can;
+using GHIElectronics.TinyCLR.Devices.Gpio;
 using GHIElectronics.TinyCLR.Devices.Spi;
 using System;
 using System.Collections;
@@ -11,8 +12,35 @@ namespace MCP2515
     /// <summary>
     /// Represents a class that handles the CAN tranceiver MCP2515.
     /// </summary>
-    public class MCP2515
+    public class MCP2515 : CanInterface
     {
+
+        /* special address description flags for the CAN_ID */
+        public const ulong CAN_EFF_FLAG = 0x80000000UL; /* EFF/SFF is set in the MSB */
+        public const ulong CAN_RTR_FLAG = 0x40000000UL;/* remote transmission request */
+        public const ulong CAN_ERR_FLAG = 0x20000000UL; /* error message frame */
+
+        /* valid bits in CAN ID for frame formats */
+        public const ulong CAN_SFF_MASK = 0x000007FFUL; /* standard frame format (SFF) */
+        public const ulong CAN_EFF_MASK = 0x1FFFFFFFUL; /* extended frame format (EFF) */
+        public const ulong CAN_ERR_MASK = 0x1FFFFFFFUL; /* omit EFF, RTR, ERR flags */
+
+        /*
+         * Controller Area Network Identifier structure
+         *
+         * bit 0-28 : CAN identifier (11/29 bit)
+         * bit 29   : error message frame flag (0 = data frame, 1 = error message)
+         * bit 30   : remote transmission request flag (1 = rtr frame)
+         * bit 31   : frame format flag (0 = standard 11 bit, 1 = extended 29 bit)
+         */
+
+        public const byte CAN_SFF_ID_BITS = 11;
+        public const byte CAN_EFF_ID_BITS = 29;
+
+        /* CAN payload length and DLC definitions according to ISO 11898-1 */
+        public const byte CAN_MAX_DLC = 8;
+        public const byte CAN_MAX_DLEN = 8;
+
         /*
          *  Speed 8M
          */
@@ -214,16 +242,6 @@ namespace MCP2515
             CLKOUT_DIV2 = 0x1,
             CLKOUT_DIV4 = 0x2,
             CLKOUT_DIV8 = 0x3,
-        };
-
-        public enum ERROR
-        {
-            ERROR_OK = 0,
-            ERROR_FAIL = 1,
-            ERROR_ALLTXBUSY = 2,
-            ERROR_FAILINIT = 3,
-            ERROR_FAILTX = 4,
-            ERROR_NOMSG = 5
         };
 
         public enum MASK
@@ -448,142 +466,77 @@ namespace MCP2515
         const int N_TXBUFFERS = 3;
         const int N_RXBUFFERS = 2;
 
+        class CanFrame
+        {
+            public ulong can_id;  /* 32 bit CAN_ID + EFF/RTR/ERR flags */
+            public byte can_dlc; /* frame payload length in byte (0 .. CAN_MAX_DLEN) */
+            public byte[] data = new byte[CAN_MAX_DLC];
+};
+
         struct TXBn_REGS
         {
-            public REGISTER CTRL;
-            public REGISTER SIDH;
-            public REGISTER DATA;
+            public REGISTER CTRL { get; set; }
+            public REGISTER SIDH { get; set; }
+            public REGISTER DATA { get; set; }
         }
 
         struct RXBn_REGS
         {
-            public REGISTER CTRL;
-            public REGISTER SIDH;
-            public REGISTER DATA;
-            public CANINTF CANINTF_RXnIF;
+            public REGISTER CTRL { get; set; }
+            public REGISTER SIDH { get; set; }
+            public REGISTER DATA { get; set; }
+            public CANINTF CANINTF_RXnIF { get; set; }
         }
 
-        RXBn_REGS RXB0 = new RXBn_REGS();
-        RXBn_REGS RXB1 = new RXBn_REGS();
-        RXBn_REGS[] RXB;
+        static RXBn_REGS RXB0 = new RXBn_REGS(){
+            CTRL = REGISTER.MCP_RXB0CTRL,
+            SIDH = REGISTER.MCP_RXB0SIDH,
+            DATA = REGISTER.MCP_RXB0DATA,
+            CANINTF_RXnIF = CANINTF.CANINTF_RX0IF
+        };
+        static RXBn_REGS RXB1 = new RXBn_REGS()
+        {
+            CTRL = REGISTER.MCP_RXB1CTRL,
+            SIDH = REGISTER.MCP_RXB1SIDH,
+            DATA = REGISTER.MCP_RXB1DATA,
+            CANINTF_RXnIF = CANINTF.CANINTF_RX1IF
+        };
+        static RXBn_REGS[] RXB = { RXB0, RXB1 };
 
-        TXBn_REGS TXB0 = new TXBn_REGS();
-        TXBn_REGS TXB1 = new TXBn_REGS();
-        TXBn_REGS TXB2 = new TXBn_REGS();
-        TXBn_REGS[] TXB;
+        static TXBn_REGS TXB0 = new TXBn_REGS()
+        {
+            CTRL = REGISTER.MCP_TXB0CTRL,
+            SIDH = REGISTER.MCP_TXB0SIDH,
+            DATA = REGISTER.MCP_TXB0DATA,
+        };
+        static TXBn_REGS TXB1 = new TXBn_REGS()
+        {
+            CTRL = REGISTER.MCP_TXB1CTRL,
+            SIDH = REGISTER.MCP_TXB1SIDH,
+            DATA = REGISTER.MCP_TXB1DATA,
+        };
+        static TXBn_REGS TXB2 = new TXBn_REGS()
+        {
+            CTRL = REGISTER.MCP_TXB2CTRL,
+            SIDH = REGISTER.MCP_TXB2SIDH,
+            DATA = REGISTER.MCP_TXB2DATA,
+        };
+
+        static TXBn_REGS[] TXB = {TXB0, TXB1, TXB2};
 
         SpiDevice spi;
+
+        public override int WriteErrorCount { get => ErrorCountTX(); set => throw new NotImplementedException(); }
+        public override int ReadErrorCount { get => ErrorCountRX(); set => throw new NotImplementedException(); }
+
+        public override event OnCanMessageReceived OnMessageReceived;
 
         public MCP2515(SpiDevice spi)
         {
             this.spi = spi;
 
-            RXB0.CTRL = REGISTER.MCP_RXB0CTRL;
-            RXB0.SIDH = REGISTER.MCP_RXB0SIDH;
-            RXB0.DATA = REGISTER.MCP_RXB0DATA;
-            RXB0.CANINTF_RXnIF = CANINTF.CANINTF_RX0IF;
-
-            RXB1.CTRL = REGISTER.MCP_RXB1CTRL;
-            RXB1.SIDH = REGISTER.MCP_RXB1SIDH;
-            RXB1.DATA = REGISTER.MCP_RXB1DATA;
-            RXB1.CANINTF_RXnIF = CANINTF.CANINTF_RX1IF;
-
-            RXB = new RXBn_REGS[] { RXB0, RXB1 };
-
-            TXB0.CTRL = REGISTER.MCP_TXB0CTRL;
-            TXB0.SIDH = REGISTER.MCP_TXB0SIDH;
-            TXB0.DATA = REGISTER.MCP_TXB0DATA;
-
-            TXB1.CTRL = REGISTER.MCP_TXB1CTRL;
-            TXB1.SIDH = REGISTER.MCP_TXB1SIDH;
-            TXB1.DATA = REGISTER.MCP_TXB1DATA;
-
-            TXB2.CTRL = REGISTER.MCP_TXB2CTRL;
-            TXB2.SIDH = REGISTER.MCP_TXB2SIDH;
-            TXB2.DATA = REGISTER.MCP_TXB2DATA;
-
-            TXB = new TXBn_REGS[] { TXB0, TXB1, TXB2 };
-        }
-
-        ERROR SetMode(CANCTRL_REQOP_MODE mode)
-        {
-            ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_REQOP, (byte)mode);
-
-            DateTime start = DateTime.Now;
-            DateTime end = start.AddMilliseconds(10);
-            bool modeMatch = false;
-
-            while (DateTime.Now < end)
-            {
-                byte newMode = ReadRegister(REGISTER.MCP_CANCTRL);
-                newMode &= CANSTAT_OPMOD;
-                modeMatch = newMode == (byte)mode;
-
-                if (modeMatch)
-                    break;
-            }
-
-            return modeMatch ? ERROR.ERROR_OK : ERROR.ERROR_FAIL;
-        }
-
-        byte ReadRegister(REGISTER reg)
-        {
-            byte[] rxd = new byte[3];
-            spi.TransferFullDuplex(new byte[] { INSTRUCTION_READ, (byte)reg }, 0, 2, rxd, 0, 3);
-            return rxd[2];
-        }
-
-        void ReadRegisters(REGISTER reg, byte[] values, byte n)
-        {
-            spi.TransferSequential(new byte[] { INSTRUCTION_READ, (byte)reg }, 0, 2, values, 0, n);
-        }
-
-        void SetRegister(REGISTER reg, byte value)
-        {
-            spi.Write(new byte[] { INSTRUCTION_WRITE, (byte)reg, value });
-        }
-
-        void SetRegisters(REGISTER reg, byte[] values, byte n)
-        {
-            byte[] txd = new byte[n + 2];
-
-            txd[0] = INSTRUCTION_WRITE;
-            txd[1] = (byte)reg;
-
-            for (int i = 2; i < n + 2; i++)
-            {
-                txd[i] = values[i - 2];
-            }
-
-            spi.Write(txd);
-        }
-
-        void ModifyRegister(REGISTER reg, byte mask, byte data)
-        {
-            spi.Write(new byte[] { INSTRUCTION_BITMOD, (byte)reg, mask, data });
-        }
-
-        void PrepareId(byte[] buffer, bool ext, uint id)
-        {
-            ushort canid = (ushort)(id & 0x0FFFF);
-
-            if (ext)
-            {
-                buffer[MCP_EID0] = (byte)(canid & 0xFF);
-                buffer[MCP_EID8] = (byte)(canid >> 8);
-                canid = (ushort)(id >> 16);
-                buffer[MCP_SIDL] = (byte)(canid & 0x03);
-                buffer[MCP_SIDL] += (byte)((canid & 0x1C) << 3);
-                buffer[MCP_SIDL] |= TXB_EXIDE_MASK;
-                buffer[MCP_SIDH] = (byte)(canid >> 5);
-            }
-            else
-            {
-                buffer[MCP_SIDH] = (byte)(canid >> 3);
-                buffer[MCP_SIDL] = (byte)((canid & 0x07) << 5);
-                buffer[MCP_EID0] = 0;
-                buffer[MCP_EID8] = 0;
-            }
+            /*Thread thread = new Thread(Run);
+            thread.Start();*/
         }
 
         public ERROR Reset()
@@ -592,12 +545,12 @@ namespace MCP2515
 
             byte[] zeros = new byte[14];
 
-            SetRegisters(REGISTER.MCP_TXB0CTRL, zeros, 0);
-            SetRegisters(REGISTER.MCP_TXB1CTRL, zeros, 0);
-            SetRegisters(REGISTER.MCP_TXB2CTRL, zeros, 0);
+            SetRegisters(REGISTER.MCP_TXB0CTRL, zeros, 14);
+            SetRegisters(REGISTER.MCP_TXB1CTRL, zeros, 14);
+            SetRegisters(REGISTER.MCP_TXB2CTRL, zeros, 14);
 
-            SetRegisters(REGISTER.MCP_RXB0CTRL, zeros, 0);
-            SetRegisters(REGISTER.MCP_RXB1CTRL, zeros, 0);
+            SetRegisters(REGISTER.MCP_RXB0CTRL, zeros, 1);
+            SetRegisters(REGISTER.MCP_RXB1CTRL, zeros, 1);
 
             SetRegister(REGISTER.MCP_CANINTE, (byte)(CANINTF.CANINTF_RX0IF | CANINTF.CANINTF_RX1IF | CANINTF.CANINTF_ERRIF | CANINTF.CANINTF_MERRF));
 
@@ -637,6 +590,50 @@ namespace MCP2515
             return ERROR.ERROR_OK;
         }
 
+        byte ReadRegister(REGISTER reg)
+        {
+            byte[] rxd = new byte[1];
+            spi.TransferSequential(new byte[] { INSTRUCTION_READ, (byte)reg }, 0, 2, rxd, 0, 1);
+            return rxd[0];
+        }
+
+        void ReadRegisters(REGISTER reg, byte[] values, byte n)
+        {
+            spi.TransferSequential(new byte[] { INSTRUCTION_READ, (byte)reg }, 0, 2, values, 0, n);
+        }
+
+        void SetRegister(REGISTER reg, byte value)
+        {
+            spi.Write(new byte[] { INSTRUCTION_WRITE, (byte)reg, value });
+        }
+
+        void SetRegisters(REGISTER reg, byte[] values, byte n)
+        {
+            byte[] txd = new byte[n + 2];
+
+            txd[0] = INSTRUCTION_WRITE;
+            txd[1] = (byte)reg;
+
+            for (int i = 2; i < n + 2; i++)
+            {
+                txd[i] = values[i - 2];
+            }
+
+            spi.Write(txd);
+        }
+
+        void ModifyRegister(REGISTER reg, byte mask, byte data)
+        {
+            spi.Write(new byte[] { INSTRUCTION_BITMOD, (byte)reg, mask, data });
+        }
+
+        public byte GetStatus()
+        {
+            byte[] rxd = new byte[1];
+            spi.TransferSequential(new byte[] { INSTRUCTION_READ_STATUS }, 0, 1, rxd, 0, 1);
+            return rxd[0];
+        }
+
         public ERROR SetConfigMode()
         {
             return SetMode(CANCTRL_REQOP_MODE.CANCTRL_REQOP_CONFIG);
@@ -657,33 +654,35 @@ namespace MCP2515
         {
             return SetMode(CANCTRL_REQOP_MODE.CANCTRL_REQOP_NORMAL);
         }
-        public ERROR SetClkOut(CAN_CLKOUT divisor)
-        {
-            if (divisor == CAN_CLKOUT.CLKOUT_DISABLE)
-            {
-                /* Turn off CLKEN */
-                ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_CLKEN, 0x00);
 
-                /* Turn on CLKOUT for SOF */
-                ModifyRegister(REGISTER.MCP_CNF3, CNF3_SOF, CNF3_SOF);
-                return ERROR.ERROR_OK;
+        ERROR SetMode(CANCTRL_REQOP_MODE mode)
+        {
+            ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_REQOP, (byte)mode);
+
+            DateTime start = DateTime.Now;
+            DateTime end = start.AddMilliseconds(10);
+            bool modeMatch = false;
+
+            while (DateTime.Now < end)
+            {
+                byte newMode = ReadRegister(REGISTER.MCP_CANSTAT);
+                newMode &= CANSTAT_OPMOD;
+                modeMatch = newMode == (byte)mode;
+
+                if (modeMatch)
+                    break;
             }
 
-            /* Set the prescaler (CLKPRE) */
-            ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_CLKPRE, (byte)divisor);
-
-            /* Turn on CLKEN */
-            ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_CLKEN, CANCTRL_CLKEN);
-
-            /* Turn off CLKOUT for SOF */
-            ModifyRegister(REGISTER.MCP_CNF3, CNF3_SOF, 0x00);
-            return ERROR.ERROR_OK;
+            return modeMatch ? ERROR.ERROR_OK : ERROR.ERROR_FAIL;
         }
+
+        
 
         public ERROR SetBitrate(CAN_SPEED canSpeed)
         {
             return SetBitrate(canSpeed, CAN_CLOCK.MCP_16MHZ);
         }
+
         public ERROR SetBitrate(CAN_SPEED canSpeed, CAN_CLOCK canClock)
         {
             ERROR error = SetConfigMode();
@@ -973,6 +972,53 @@ namespace MCP2515
                 return ERROR.ERROR_FAIL;
             }
         }
+
+        public ERROR SetClkOut(CAN_CLKOUT divisor)
+        {
+            if (divisor == CAN_CLKOUT.CLKOUT_DISABLE)
+            {
+                /* Turn off CLKEN */
+                ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_CLKEN, 0x00);
+                 
+                /* Turn on CLKOUT for SOF */
+                ModifyRegister(REGISTER.MCP_CNF3, CNF3_SOF, CNF3_SOF);
+                return ERROR.ERROR_OK;
+            }
+
+            /* Set the prescaler (CLKPRE) */
+            ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_CLKPRE, (byte)divisor);
+
+            /* Turn on CLKEN */
+            ModifyRegister(REGISTER.MCP_CANCTRL, CANCTRL_CLKEN, CANCTRL_CLKEN);
+
+            /* Turn off CLKOUT for SOF */
+            ModifyRegister(REGISTER.MCP_CNF3, CNF3_SOF, 0x00);
+            return ERROR.ERROR_OK;
+        }
+
+        void PrepareId(byte[] buffer, bool ext, uint id)
+        {
+            ushort canid = (ushort)(id & 0x0FFFF);
+
+            if (ext)
+            {
+                buffer[MCP_EID0] = (byte)(canid & 0xFF);
+                buffer[MCP_EID8] = (byte)(canid >> 8);
+                canid = (ushort)(id >> 16);
+                buffer[MCP_SIDL] = (byte)(canid & 0x03);
+                buffer[MCP_SIDL] += (byte)((canid & 0x1C) << 3);
+                buffer[MCP_SIDL] |= TXB_EXIDE_MASK;
+                buffer[MCP_SIDH] = (byte)(canid >> 5);
+            }
+            else
+            {
+                buffer[MCP_SIDH] = (byte)(canid >> 3);
+                buffer[MCP_SIDL] = (byte)((canid & 0x07) << 5);
+                buffer[MCP_EID0] = 0;
+                buffer[MCP_EID8] = 0;
+            }
+        }
+
         public ERROR SetFilterMask(MASK mask, bool ext, uint ulData)
         {
             ERROR res = SetConfigMode();
@@ -1025,27 +1071,23 @@ namespace MCP2515
 
             return ERROR.ERROR_OK;
         }
-        public ERROR SendMessage(TXBn txbn, CanFrame frame)
+        public ERROR SendMessage(TXBn txbn, CanMessage message)
         {
-            if (frame.can_dlc > CanFrame.CAN_MAX_DLC)
+            if (message.Length > CAN_MAX_DLC)
                 return ERROR.ERROR_FAILTX;
 
             TXBn_REGS txbuf = TXB[(int)txbn];
 
             byte[] data = new byte[13];
 
-            bool ext = (frame.can_id & CanFrame.CAN_EFF_FLAG) > 0;
-            bool rtr = (frame.can_id & CanFrame.CAN_RTR_FLAG) > 0;
+            uint id = (uint)((ulong)message.ArbitrationId & (message.ExtendedId ? CAN_EFF_MASK : CAN_SFF_MASK));
 
-            uint id = (uint)(frame.can_id & (ext ? CanFrame.CAN_EFF_MASK : CanFrame.CAN_SFF_MASK));
+            PrepareId(data, message.ExtendedId, id);
 
-            PrepareId(data, ext, id);
+            data[MCP_DLC] = message.RemoteTransmissionRequest ? (byte)(message.Length | RTR_MASK) : (byte)message.Length;
+            Array.Copy(message.Data, 0, data, MCP_DATA, message.Length);
 
-            data[MCP_DLC] = rtr ? (byte)(frame.can_dlc | RTR_MASK) : frame.can_dlc;
-
-            Array.Copy(data, MCP_DATA, frame.data, 0, frame.can_dlc);
-
-            SetRegisters(txbuf.SIDH, data, (byte)(5 + frame.can_dlc));
+            SetRegisters(txbuf.SIDH, data, (byte)(5 + message.Length));
 
             ModifyRegister(txbuf.CTRL, (byte)TXBnCTRL.TXB_TXREQ, (byte)TXBnCTRL.TXB_TXREQ);
 
@@ -1056,9 +1098,9 @@ namespace MCP2515
             }
             return ERROR.ERROR_OK;
         }
-        public ERROR SendMessage(CanFrame frame)
+        public ERROR SendMessage(CanMessage message)
         {
-            if (frame.can_dlc > CanFrame.CAN_MAX_DLEN)
+            if (message.Length > CAN_MAX_DLEN)
             {
                 return ERROR.ERROR_FAILTX;
             }
@@ -1071,15 +1113,15 @@ namespace MCP2515
                 byte ctrlval = ReadRegister(txbuf.CTRL);
                 if ((ctrlval & (byte)TXBnCTRL.TXB_TXREQ) == 0)
                 {
-                    return SendMessage(txBuffers[i], frame);
+                    return SendMessage(txBuffers[i], message);
                 }
             }
 
             return ERROR.ERROR_ALLTXBUSY;
         }
-        public ERROR ReadMessage(RXBn rxbn, out CanFrame frame)
+        public ERROR ReadMessage(RXBn rxbn, out CanMessage message)
         {
-            frame = new CanFrame();
+            message = new CanMessage();
 
             RXBn_REGS rxb = RXB[(int)rxbn];
 
@@ -1094,11 +1136,11 @@ namespace MCP2515
                 id = (uint)((id << 2) + (tbufdata[MCP_SIDL] & 0x03));
                 id = (id << 8) + tbufdata[MCP_EID8];
                 id = (id << 8) + tbufdata[MCP_EID0];
-                id |= (uint)CanFrame.CAN_EFF_FLAG;
+                message.ExtendedId = true;
             }
 
             byte dlc = (byte)(tbufdata[MCP_DLC] & DLC_MASK);
-            if (dlc > CanFrame.CAN_MAX_DLEN)
+            if (dlc > CAN_MAX_DLEN)
             {
                 return ERROR.ERROR_FAIL;
             }
@@ -1106,37 +1148,38 @@ namespace MCP2515
             byte ctrl = ReadRegister(rxb.CTRL);
             if ((ctrl & RXBnCTRL_RTR) > 0)
             {
-                id |= (uint)CanFrame.CAN_RTR_FLAG;
+                message.RemoteTransmissionRequest = true;
             }
 
-            frame.can_id = id;
-            frame.can_dlc = dlc;
+            message.ArbitrationId = (int)id;
+            message.Length = dlc;
 
-            ReadRegisters(rxb.DATA, frame.data, dlc);
+            ReadRegisters(rxb.DATA, message.Data, dlc);
 
             ModifyRegister(REGISTER.MCP_CANINTF, (byte)rxb.CANINTF_RXnIF, 0);
 
             return ERROR.ERROR_OK;
         }
-        public ERROR ReadMessage(out CanFrame frame)
+        public override ERROR ReadMessage(out CanMessage message)
         {
-            frame = new CanFrame();
+            message = new CanMessage();
 
             ERROR rc;
             byte stat = GetStatus();
 
             if ((stat & (byte)STAT.STAT_RX0IF) > 0)
             {
-                rc = ReadMessage(RXBn.RXB0, out frame);
+                rc = ReadMessage(RXBn.RXB0, out message);
             }
             else if ((stat & (byte)STAT.STAT_RX1IF) > 0)
             {
-                rc = ReadMessage(RXBn.RXB1, out frame);
+                rc = ReadMessage(RXBn.RXB1, out message);
             }
             else
             {
                 rc = ERROR.ERROR_NOMSG;
             }
+
 
             return rc;
         }
@@ -1177,23 +1220,18 @@ namespace MCP2515
         {
             return ReadRegister(REGISTER.MCP_CANINTF);
         }
+        public void ClearInterrupts()
+        {
+            SetRegister(REGISTER.MCP_CANINTF, 0);
+        }    
         public byte GetInterruptMask()
         {
             return ReadRegister(REGISTER.MCP_CANINTE);
         }
-        public void ClearInterrupts()
-        {
 
-        }
         public void ClearTXInterrupts()
         {
             ModifyRegister(REGISTER.MCP_CANINTF, (byte)(CANINTF.CANINTF_TX0IF | CANINTF.CANINTF_TX1IF | CANINTF.CANINTF_TX2IF), 0);
-        }
-        public byte GetStatus()
-        {
-            byte[] rxd = new byte[1];
-            spi.TransferSequential(new byte[] { INSTRUCTION_READ_STATUS }, 0, 1, rxd, 0, 1);
-            return rxd[0];
         }
         public void ClearRXnOVR()
         {
@@ -1219,6 +1257,64 @@ namespace MCP2515
         public byte ErrorCountTX()
         {
             return ReadRegister(REGISTER.MCP_TEC);
+        }
+
+        public override void Enable()
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void Disable()
+        {
+            throw new NotImplementedException();
+        }
+
+        public override bool WriteMessage(CanMessage message)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override int WriteMessages(CanMessage[] messages, int offset, int count)
+        {
+            for(int i = offset; i < count; i++)
+            {
+                while(SendMessage(messages[i]) != ERROR.ERROR_OK);
+            }
+
+            return 0;
+        }
+
+        public override int ReadMessages(CanMessage[] messages, int offset, int count)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void SetNominalBitTiming(CanBitTiming bitTiming)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void SetDataBitTiming(CanBitTiming bitTiming)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void ClearWriteBuffer()
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void ClearReadBuffer()
+        {
+            throw new NotImplementedException();
+        }
+
+        private void Run()
+        {
+            while (true)
+            {
+                Thread.Sleep(10);
+            }
         }
     }
 }
